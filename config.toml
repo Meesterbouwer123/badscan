@@ -1,0 +1,9 @@
+# config file for this program
+
+# if we should be sending pings, set this to false if you just want to look at the packets going by
+send_packets = true
+
+# the interface to send packets over
+# uncomment this if you want to manually specify the interface to use
+#interface = "{4BF96964-647E-4F12-BBAC-759A975093BE}"  # windows format
+interface = "eth0"  # linux format

@@ -1,9 +1,22 @@
 # config file for this program
 
-# if we should be sending pings, set this to false if you just want to look at the packets going by
-send_packets = true
-
 # the interface to send packets over
-# uncomment this if you want to manually specify the interface to use
+# uncomment this if you want to manually specify the interface to use, else the program will try to guess the default interface
 #interface = "{4BF96964-647E-4F12-BBAC-759A975093BE}"  # windows format
 interface = "eth0"  # linux format
+
+# key to avoid attackers from injecting fake responses
+# the best way to generate this is mashing your head on your numpad
+scankey = 123456789
+
+# protocol-specific configurations
+[protocol]
+# the protocol used for scanning (case-sensitive)
+# Options (so far): Query
+type = "Query"
+
+# query options
+# fullstat:
+#   if we should request the complete stat or a partial stat
+#   partial stats are easier to parse, but contain less information than full ones
+args = {fullstat = false}

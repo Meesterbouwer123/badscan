@@ -3,10 +3,23 @@ use serde_derive::Deserialize;
 
 #[derive(Deserialize, Default)]
 pub struct Config {
-    pub send_packets: bool,
     pub interface: Option<String>,
+    pub scankey: i64,
+    pub protocol: Protocol,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "args")]
+pub enum Protocol {
+    Query { fullstat: bool },
+    Raknet,
+}
+
+impl Default for Protocol {
+    fn default() -> Self {
+        Protocol::Query { fullstat: false }
+    }
+}
 pub static CONFIG: Lazy<Config> = Lazy::new(|| Config::get());
 const FILE_NAME: &str = "config.toml";
 

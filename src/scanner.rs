@@ -23,7 +23,7 @@ use crate::interface::MyInterface;
 // constants
 pub const UDP_HEADER_LEN: usize = 8;
 
-pub trait StatelessProtocol {
+pub trait StatelessProtocol: Clone + Sync {
     fn initial_packet(&self, addr: &SocketAddrV4) -> Vec<u8>;
 
     fn handle_packet(&self, send_back: &dyn Fn(Vec<u8>), source: &SocketAddrV4, packet: &[u8]);
@@ -31,17 +31,14 @@ pub trait StatelessProtocol {
 
 pub struct StatelessScanner {
     _interface: MyInterface,
-    protocol: Arc<dyn StatelessProtocol + Send + Sync>,
+    protocol: Arc<dyn StatelessProtocol>,
     _send_thread: JoinHandle<()>,
     _recv_thread: JoinHandle<()>,
     packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
 }
 
 impl<'a> StatelessScanner {
-    pub fn new(
-        interface: &'a MyInterface,
-        protocol: impl StatelessProtocol + Send + Sync + 'static,
-    ) -> StatelessScanner {
+    pub fn new(interface: &'a MyInterface, protocol: impl StatelessProtocol) -> StatelessScanner {
         let protocol = Arc::new(protocol);
         let interface = interface.clone();
 

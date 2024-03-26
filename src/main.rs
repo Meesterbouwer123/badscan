@@ -1,19 +1,19 @@
-use std::{net::SocketAddrV4, thread, time::Duration};
+use std::{
+    net::SocketAddrV4,
+    sync::{Arc, RwLock},
+    thread,
+    time::Duration,
+};
 
-mod config;
-mod interface;
-mod protocols;
-mod scanner;
-mod utils;
-use protocols::{query::QueryResponse, raknet::RaknetProtocol};
-use scanner::StatelessProtocol;
-
-use crate::{
-    config::CONFIG, interface::MyInterface, protocols::query::MinecraftQueryProtocol,
-    scanner::StatelessScanner,
+use badscan::{
+    config::{Protocol, CONFIG},
+    interface::MyInterface,
+    protocols::{query::{MinecraftQueryProtocol, QueryResponse}, raknet::RaknetProtocol},
+    scanner::{StatelessProtocol, StatelessScanner},
 };
 
 fn main() {
+    println!();
     // get interface to use
     let interface = match &CONFIG.interface {
         Some(interface) => MyInterface::from_name(&interface),
@@ -21,8 +21,7 @@ fn main() {
     };
 
     println!(
-        "Using interface `{}` ({}): {}",
-        interface.network_interface.description,
+        "Using interface `{}`: {}",
         interface.network_interface.name,
         interface
             .network_interface
@@ -33,17 +32,32 @@ fn main() {
             .join(", ")
     );
 
-    // create scanner
-    let protocol = get_protocol();
-    let mut scanner = StatelessScanner::new(&interface, protocol);
+    // select protocol
+    let protocol: Arc<RwLock<Box<dyn StatelessProtocol>>> = Arc::new(RwLock::new(Box::new(
+        MinecraftQueryProtocol::new(|_, _| panic!("this should not be called"), true),
+    )));
 
-    scanner.scan(SocketAddrV4::new("192.168.2.120".parse().unwrap(), 25565));
-    thread::sleep(Duration::from_secs(1));
+    {
+        let mut protocol = protocol.write().unwrap();
+        *protocol = match CONFIG.protocol {
+            Protocol::Raknet => Box::new(RaknetProtocol::new()),
+            Protocol::Query { fullstat } => {
+                Box::new(MinecraftQueryProtocol::new(handle_query, fullstat))
+            }
+        };
+    }
+    println!("using protocol: {}", protocol.read().unwrap().name());
+
+    // create scanner
+    let mut scanner = StatelessScanner::new(&interface, protocol.clone());
+
+    scanner.scan(SocketAddrV4::new("192.168.2.120".parse().unwrap(), 19132));
+    thread::sleep(Duration::from_secs(5));
 }
 
 fn handle_query(addr: &SocketAddrV4, response: QueryResponse) {
     match response {
-        protocols::query::QueryResponse::Partial {
+        QueryResponse::Partial {
             motd,
             gametype,
             map,
@@ -53,7 +67,7 @@ fn handle_query(addr: &SocketAddrV4, response: QueryResponse) {
         } => {
             println!("Got partial stat from {addr}: \n\tMOTD = {motd}\n\tgametype = {gametype}\n\tmap = {map}\n\tnumplayers = {numplayers}\n\tmaxplayers = {maxplayers}\n\thost = {host}");
         }
-        protocols::query::QueryResponse::Full {
+        QueryResponse::Full {
             kv_section,
             players,
         } => {
@@ -70,14 +84,4 @@ fn handle_query(addr: &SocketAddrV4, response: QueryResponse) {
             println!("{output}");
         }
     }
-}
-
-fn get_protocol() -> dyn StatelessProtocol {
-    let proto = match CONFIG.protocol {
-        config::Protocol::Raknet => RaknetProtocol::new() as dyn StatelessProtocol,
-        config::Protocol::Query { fullstat } => {
-            MinecraftQueryProtocol::new(handle_query, fullstat) as dyn StatelessProtocol
-        }
-    };
-    proto
 }

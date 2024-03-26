@@ -8,7 +8,7 @@ pub struct Config {
     pub protocol: Protocol,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type", content = "args")]
 pub enum Protocol {
     Query { fullstat: bool },

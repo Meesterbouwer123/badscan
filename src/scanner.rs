@@ -2,7 +2,7 @@ use std::{
     net::{IpAddr, SocketAddrV4},
     sync::{
         mpsc::{self, Sender},
-        Arc,
+        Arc, RwLock,
     },
     thread::{self, JoinHandle},
 };
@@ -23,23 +23,27 @@ use crate::interface::MyInterface;
 // constants
 pub const UDP_HEADER_LEN: usize = 8;
 
-pub trait StatelessProtocol: Clone + Sync {
+pub trait StatelessProtocol: Sync + Send {
     fn initial_packet(&self, addr: &SocketAddrV4) -> Vec<u8>;
 
     fn handle_packet(&self, send_back: &dyn Fn(Vec<u8>), source: &SocketAddrV4, packet: &[u8]);
+
+    fn name(&self) -> String;
 }
 
 pub struct StatelessScanner {
     _interface: MyInterface,
-    protocol: Arc<dyn StatelessProtocol>,
+    protocol: Arc<RwLock<Box<dyn StatelessProtocol>>>,
     _send_thread: JoinHandle<()>,
     _recv_thread: JoinHandle<()>,
     packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
 }
 
 impl<'a> StatelessScanner {
-    pub fn new(interface: &'a MyInterface, protocol: impl StatelessProtocol) -> StatelessScanner {
-        let protocol = Arc::new(protocol);
+    pub fn new(
+        interface: &'a MyInterface,
+        protocol: Arc<RwLock<Box<dyn StatelessProtocol>>>,
+    ) -> StatelessScanner {
         let interface = interface.clone();
 
         let (mut network_tx, mut network_rx) =
@@ -146,7 +150,7 @@ impl<'a> StatelessScanner {
                                     let source =
                                         SocketAddrV4::new(packet.get_source(), udp.get_source());
 
-                                    protocol.handle_packet(
+                                    protocol.read().unwrap().handle_packet(
                                         &|packet: Vec<u8>| {
                                             packet_send.send((source, packet)).unwrap()
                                         },
@@ -179,7 +183,7 @@ impl<'a> StatelessScanner {
 
     pub fn scan(&'a mut self, addr: SocketAddrV4) {
         // send initial packet
-        let packet = self.protocol.initial_packet(&addr);
+        let packet = self.protocol.read().unwrap().initial_packet(&addr);
         self.send_to(addr, packet);
     }
 

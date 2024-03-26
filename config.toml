@@ -12,11 +12,11 @@ scankey = 123456789
 # protocol-specific configurations
 [protocol]
 # the protocol used for scanning (case-sensitive)
-# Options (so far): Query
-type = "Query"
+# Options (so far): Query, Raknet
+type = "Raknet"
 
 # query options
 # fullstat:
 #   if we should request the complete stat or a partial stat
 #   partial stats are easier to parse, but contain less information than full ones
-args = {fullstat = false}
+#args = {fullstat = false}

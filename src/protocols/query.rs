@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
-    io::Write,
+    io::{self, Cursor, Read, Write},
     net::{SocketAddr, SocketAddrV4},
 };
+
+use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::{scanner::StatelessProtocol, utils};
 
@@ -35,11 +37,16 @@ impl QueryResponse {
                 return Err(());
             }
 
+            // read K,V section
+            let mut stream = Cursor::new(response);
+            let mut buf = [0; 16];
+            stream.read(&mut buf).unwrap(); // here we can use .unwrap, because we already checked if we ahve the space
+
             // make sure the marker is correct
-            if response[5..16] != KV_MARKER {
+            if buf[5..16] != KV_MARKER {
                 println!(
                     "{:?} != {KV_MARKER:?}",
-                    response[5..16]
+                    buf[5..16]
                         .iter()
                         .map(|c| format!("0x{c:X}"))
                         .collect::<Vec<_>>()
@@ -47,52 +54,36 @@ impl QueryResponse {
                 );
             }
 
-            // read K,V section
-            let mut i = 16;
             let mut kv_section = HashMap::new();
             loop {
                 //key
-                let mut key = String::new();
-                while response[i] != 0 {
-                    key.push(response[i] as char);
-                    i += 1;
-                }
-                i += 1;
+                let Ok(key) = read_string(&mut stream) else {
+                    return Err(());
+                };
                 if key.len() == 0 {
                     break;
                 }
                 //value
-                let mut value = String::new();
-                while response[i] != 0 {
-                    value.push(response[i] as char);
-                    i += 1;
-                }
-                i += 1;
+                let Ok(value) = read_string(&mut stream) else {
+                    return Err(());
+                };
                 kv_section.insert(key, value);
             }
 
             // second marker
-            if response[i..i + 10] != PLAYER_MARKER {
-                println!(
-                    "{:?} !+ {PLAYER_MARKER:?}",
-                    response[i..i + 10]
-                        .iter()
-                        .map(|c| format!("0x{c:X}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+            let mut buf = [0; PLAYER_MARKER.len()];
+            stream.read(&mut buf).map_err(|_| ())?;
+            if buf != PLAYER_MARKER {
+                println!("{buf:?} !+ {PLAYER_MARKER:?}");
             }
 
             // players
             let mut players = vec![];
             loop {
                 //player
-                let mut player = String::new();
-                while response[i] != 0 {
-                    player.push(response[i] as char);
-                    i += 1;
-                }
-                i += 1;
+                let Ok(player) = read_string(&mut stream) else {
+                    return Err(());
+                };
                 if player.len() == 0 {
                     break;
                 }
@@ -105,52 +96,40 @@ impl QueryResponse {
             })
         } else {
             // partial stat
-            let mut i = 5;
+            let mut stream = Cursor::new(response);
+            let mut buf = [0; 5];
+            if let Err(_) = stream.read(&mut buf) {
+                return Err(());
+            }
 
             //motd
-            let mut motd = String::new();
-            while response[i] != 0 {
-                motd.push(response[i] as char);
-                i += 1;
-            }
-            i += 1;
+            let Ok(motd) = read_string(&mut stream) else {
+                return Err(());
+            };
             //gametype
-            let mut gametype = String::new();
-            while response[i] != 0 {
-                gametype.push(response[i] as char);
-                i += 1;
-            }
-            i += 1;
+            let Ok(gametype) = read_string(&mut stream) else {
+                return Err(());
+            };
             //map
-            let mut map = String::new();
-            while response[i] != 0 {
-                map.push(response[i] as char);
-                i += 1;
-            }
-            i += 1;
+            let Ok(map) = read_string(&mut stream) else {
+                return Err(());
+            };
             //numplayers
-            let mut numplayers = String::new();
-            while response[i] != 0 {
-                numplayers.push(response[i] as char);
-                i += 1;
-            }
-            i += 1;
+            let Ok(numplayers) = read_string(&mut stream) else {
+                return Err(());
+            };
             //maxplayers
-            let mut maxplayers = String::new();
-            while response[i] != 0 {
-                maxplayers.push(response[i] as char);
-                i += 1;
-            }
-            i += 1;
+            let Ok(maxplayers) = read_string(&mut stream) else {
+                return Err(());
+            };
             // hostport
-            let hostport = response[i] as u16 + response[i + 1] as u16 * 256;
-            i += 2;
+            let Ok(hostport) = stream.read_u16::<LittleEndian>() else {
+                return Err(());
+            };
             //hostip
-            let mut hostip = String::new();
-            while response[i] != 0 {
-                hostip.push(response[i] as char);
-                i += 1;
-            }
+            let Ok(hostip) = read_string(&mut stream) else {
+                return Err(());
+            };
 
             Ok(Self::Partial {
                 motd,
@@ -184,7 +163,7 @@ where
 
 impl<F> StatelessProtocol for MinecraftQueryProtocol<F>
 where
-    F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync,
+    F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync + Send,
 {
     fn initial_packet(&self, addr: &SocketAddrV4) -> Vec<u8> {
         let id = utils::cookie(addr) & 0x0F0F0F0F;
@@ -200,7 +179,7 @@ where
     fn handle_packet(&self, send_back: &dyn Fn(Vec<u8>), source: &SocketAddrV4, packet: &[u8]) {
         //println!("got packet from {source}: {packet:?}");
 
-        // check if packet can containenough data
+        // check if packet can contains enough data
         if packet.len() < 5 {
             return;
         }
@@ -242,12 +221,12 @@ where
 
                 // send response packet back
                 let mut packet = vec![];
-                packet.write(&[0xFE, 0xFD]).unwrap(); // magic
-                packet.write(&[0x00]).unwrap(); // intention = handshake
-                packet.write(&id.to_be_bytes()).unwrap(); // session ID
-                packet.write(&token.to_be_bytes()).unwrap(); // challenge token
+                packet.extend_from_slice(&[0xFE, 0xFD]); // magic
+                packet.extend_from_slice(&[0x00]); // intention = handshake
+                packet.extend_from_slice(&id.to_be_bytes()); // session ID
+                packet.extend_from_slice(&token.to_be_bytes()); // challenge token
                 if self.fullstat {
-                    packet.write(&[0x00, 0x00, 0x00, 0x00]).unwrap(); // padding
+                    packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // padding
                 }
 
                 send_back(packet);
@@ -263,4 +242,22 @@ where
             }
         }
     }
+
+    fn name(&self) -> String {
+        "Query".to_string()
+    }
+}
+
+fn read_string(stream: &mut (dyn Read)) -> io::Result<String> {
+    let mut string = String::new();
+    let mut buf = [0];
+    loop {
+        stream.read(&mut buf)?;
+        if buf[0] == 0 {
+            break;
+        } else {
+            string.push(buf[0] as char)
+        }
+    }
+    Ok(string)
 }

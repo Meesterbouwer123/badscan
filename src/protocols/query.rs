@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
-    io::{self, Cursor, Read, Write},
+    io::{self, Cursor, Read},
     net::{SocketAddr, SocketAddrV4},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::{scanner::StatelessProtocol, utils};
+use crate::scanner::StatelessProtocol;
 
 pub enum QueryResponse {
     Partial {
@@ -165,26 +165,28 @@ impl<F> StatelessProtocol for MinecraftQueryProtocol<F>
 where
     F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync + Send,
 {
-    fn initial_packet(&self, addr: &SocketAddrV4) -> Vec<u8> {
-        let id = utils::cookie(addr) & 0x0F0F0F0F;
-
+    fn initial_packet(&self, _addr: &SocketAddrV4, cookie: u32) -> Vec<u8> {
         let mut packet = vec![];
-        packet.write(&[0xFE, 0xFD]).unwrap(); // magic
-        packet.write(&[0x09]).unwrap(); // intention = handshake
-        packet.write(&id.to_be_bytes()).unwrap(); // session ID
+        packet.extend_from_slice(&[0xFE, 0xFD]); // magic
+        packet.extend_from_slice(&[0x09]); // intention = handshake
+        packet.extend_from_slice(&cookie.to_be_bytes()); // session ID
 
         packet
     }
 
-    fn handle_packet(&self, send_back: &dyn Fn(Vec<u8>), source: &SocketAddrV4, packet: &[u8]) {
-        //println!("got packet from {source}: {packet:?}");
-
+    fn handle_packet(
+        &self,
+        send_back: &dyn Fn(Vec<u8>),
+        source: &SocketAddrV4,
+        cookie: u32,
+        packet: &[u8],
+    ) {
         // check if packet can contains enough data
         if packet.len() < 5 {
             return;
         }
 
-        let id = utils::cookie(source) & 0x0F0F0F0F;
+        let id = cookie & 0x0F0F0F0F;
         // make sure ID is correct
         if id.to_be_bytes() != packet[1..=4] {
             println!(
@@ -245,6 +247,10 @@ where
 
     fn name(&self) -> String {
         "Query".to_string()
+    }
+
+    fn default_port(&self) -> u16 {
+        25565
     }
 }
 

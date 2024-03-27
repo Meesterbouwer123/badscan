@@ -1,0 +1,25 @@
+# config file for badscan (EXAMPLE)
+
+# the interface to send packets over
+# uncomment this if you want to manually specify the interface to use, else the program will try to guess the default interface
+# windows interfaces are in GUID form, linux interfaces in the 'eth0' form
+interface = "eth0"  # linux format
+
+# the protocol to use
+
+# Query
+# fullstat:
+#   If we should request the complete stat or a partial stat. Partial stats are easier to parse, but contain less information than the full ones
+#protocol = {t = "Query", c = {fullstat = true}}
+
+# Raknet
+protocol = {t = "Raknet"}
+
+[scan]
+# key to avoid attackers from injecting fake responses
+# the attacker would already have to know the exact starting time of the scan, but this mkaes it even harder for them to exploit anything
+# the best way to generate this is mashing your head on your numpad
+seed = 0
+# how long to wait for responses after a scan has finished (in seconds)
+# without this slow responses will get attributed to the next scan instead, which makes us lose servers
+wait_delay = 10

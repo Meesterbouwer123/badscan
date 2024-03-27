@@ -42,26 +42,31 @@ fn main() {
     let protocol: Arc<RwLock<Box<dyn StatelessProtocol>>> = Arc::new(RwLock::new(Box::new(
         MinecraftQueryProtocol::new(|_, _| panic!("this should not be called"), true),
     )));
-
-    {
-        let mut protocol = protocol.write().unwrap();
-        *protocol = match CONFIG.protocol {
-            Protocol::Raknet => Box::new(RaknetProtocol::new(handle_raknet)),
-            Protocol::Query { fullstat } => {
-                Box::new(MinecraftQueryProtocol::new(handle_query, fullstat))
-            }
-        };
-    }
+    set_protocol(protocol.clone(), &CONFIG.protocol);
+    
     println!("Using protocol: {}", protocol.read().unwrap().name());
 
     // create scanner
     println!("Scanning");
     let mut scanner = StatelessScanner::new(&interface, protocol.clone());
 
-    scanner.scan(SocketAddrV4::new("192.168.2.120".parse().unwrap(), 19132));
+    scanner.scan(SocketAddrV4::new(
+        "192.168.2.120".parse().unwrap(),
+        protocol.read().unwrap().default_port(),
+    ));
     println!("Scanner done, waiting for the last packets...");
-    thread::sleep(Duration::from_secs(5));
+    thread::sleep(Duration::from_secs(CONFIG.scan.wait_delay));
     println!("Done");
+}
+
+fn set_protocol(lock: Arc<RwLock<Box<dyn StatelessProtocol>>>, protocol: &Protocol) {
+    let mut lock = lock.write().unwrap();
+    *lock = match protocol {
+        &Protocol::Raknet => Box::new(RaknetProtocol::new(handle_raknet)),
+        &Protocol::Query { fullstat } => {
+            Box::new(MinecraftQueryProtocol::new(handle_query, fullstat))
+        }
+    };
 }
 
 fn handle_query(addr: &SocketAddrV4, response: QueryResponse) {

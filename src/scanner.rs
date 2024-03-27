@@ -1,10 +1,13 @@
 use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
     net::{IpAddr, SocketAddrV4},
     sync::{
         mpsc::{self, Sender},
         Arc, RwLock,
     },
     thread::{self, JoinHandle},
+    time::Instant,
 };
 
 use pnet::{
@@ -18,17 +21,25 @@ use pnet::{
     },
 };
 
-use crate::interface::MyInterface;
+use crate::{config::CONFIG, interface::MyInterface};
 
 // constants
 pub const UDP_HEADER_LEN: usize = 8;
 
 pub trait StatelessProtocol: Sync + Send {
-    fn initial_packet(&self, addr: &SocketAddrV4) -> Vec<u8>;
+    fn initial_packet(&self, addr: &SocketAddrV4, cookie: u32) -> Vec<u8>;
 
-    fn handle_packet(&self, send_back: &dyn Fn(Vec<u8>), source: &SocketAddrV4, packet: &[u8]);
+    fn handle_packet(
+        &self,
+        send_back: &dyn Fn(Vec<u8>),
+        source: &SocketAddrV4,
+        cookie: u32,
+        packet: &[u8],
+    );
 
     fn name(&self) -> String;
+
+    fn default_port(&self) -> u16;
 }
 
 pub struct StatelessScanner {
@@ -37,6 +48,7 @@ pub struct StatelessScanner {
     _send_thread: JoinHandle<()>,
     _recv_thread: JoinHandle<()>,
     packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
+    start_time: Instant,
 }
 
 impl<'a> StatelessScanner {
@@ -45,6 +57,7 @@ impl<'a> StatelessScanner {
         protocol: Arc<RwLock<Box<dyn StatelessProtocol>>>,
     ) -> StatelessScanner {
         let interface = interface.clone();
+        let start_time = Instant::now();
 
         let (mut network_tx, mut network_rx) =
             match datalink::channel(&interface.network_interface, Default::default())
@@ -115,10 +128,12 @@ impl<'a> StatelessScanner {
             })
         };
 
+        // it would be best practice to first start listening and only when that's done we start scanning, but because we are in the constructor you can't start sending packets until everything started up already
         let recv_thread = {
             let interface = interface.clone();
             let protocol = protocol.clone();
             let packet_send = packet_send_tx.clone();
+            let start_time = start_time.clone();
             thread::spawn(move || {
                 // receive packets
                 loop {
@@ -150,11 +165,14 @@ impl<'a> StatelessScanner {
                                     let source =
                                         SocketAddrV4::new(packet.get_source(), udp.get_source());
 
+                                    let cookie = Self::cookie(&source, &start_time);
+
                                     protocol.read().unwrap().handle_packet(
                                         &|packet: Vec<u8>| {
                                             packet_send.send((source, packet)).unwrap()
                                         },
                                         &source,
+                                        cookie,
                                         udp.payload(),
                                     );
                                 }
@@ -178,12 +196,14 @@ impl<'a> StatelessScanner {
             _send_thread: send_thread,
             _recv_thread: recv_thread,
             packet_send: packet_send_tx,
+            start_time,
         }
     }
 
     pub fn scan(&'a mut self, addr: SocketAddrV4) {
         // send initial packet
-        let packet = self.protocol.read().unwrap().initial_packet(&addr);
+        let cookie = Self::cookie(&addr, &self.start_time);
+        let packet = self.protocol.read().unwrap().initial_packet(&addr, cookie);
         self.send_to(addr, packet);
     }
 
@@ -191,5 +211,11 @@ impl<'a> StatelessScanner {
         self.packet_send
             .send((addr, packet))
             .expect("Could not send packet");
+    }
+
+    pub fn cookie(addr: &SocketAddrV4, start_time: &Instant) -> u32 {
+        let mut hasher = DefaultHasher::new();
+        (*addr.ip(), addr.port(), CONFIG.scan.seed, start_time).hash(&mut hasher);
+        hasher.finish() as u32
     }
 }

@@ -5,10 +5,7 @@ use std::{
 
 use byteorder::{BigEndian, ReadBytesExt};
 
-use crate::{
-    scanner::StatelessProtocol,
-    utils::{self, cookie},
-};
+use crate::scanner::StatelessProtocol;
 
 const MAGIC: [u8; 16] = [
     0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78,
@@ -169,8 +166,7 @@ impl<F> StatelessProtocol for RaknetProtocol<F>
 where
     F: Fn(&SocketAddrV4, RaknetReponse) + Clone + Sync + Send,
 {
-    fn initial_packet(&self, addr: &std::net::SocketAddrV4) -> Vec<u8> {
-        let cookie = utils::cookie(addr);
+    fn initial_packet(&self, _addr: &std::net::SocketAddrV4, cookie: u32) -> Vec<u8> {
         let mut packet = vec![];
         packet.extend_from_slice(&[0x01]); // packet ID
         packet.extend_from_slice(&cookie.to_be_bytes()); // for some reason the server sends our timestamp back lol
@@ -185,10 +181,10 @@ where
         &self,
         _send_back: &dyn Fn(Vec<u8>),
         source: &std::net::SocketAddrV4,
+        cookie: u32,
         packet: &[u8],
     ) {
         // remember, we can't use .unwrap() here since then possible attackers could crash our scanner
-        let cookie = cookie(source);
 
         // size check
         // 1 (packet ID) + 8 (timestamp) + 8 (server GUID) + MAGIC + 2 (short to the string) = 19
@@ -259,6 +255,10 @@ where
 
     fn name(&self) -> String {
         "Raknet".to_string()
+    }
+
+    fn default_port(&self) -> u16 {
+        19132
     }
 }
 

@@ -8,13 +8,18 @@ use std::{
 use badscan::{
     config::{Protocol, CONFIG},
     interface::MyInterface,
-    protocols::{query::{MinecraftQueryProtocol, QueryResponse}, raknet::RaknetProtocol},
+    protocols::{
+        query::{MinecraftQueryProtocol, QueryResponse},
+        raknet::{RaknetProtocol, RaknetReponse},
+    },
     scanner::{StatelessProtocol, StatelessScanner},
 };
 
 fn main() {
-    println!();
+    println!("Starting Badscan");
+
     // get interface to use
+    println!("Getting interface...");
     let interface = match &CONFIG.interface {
         Some(interface) => MyInterface::from_name(&interface),
         None => MyInterface::get_default(),
@@ -33,6 +38,7 @@ fn main() {
     );
 
     // select protocol
+    println!("Selecting protocol...");
     let protocol: Arc<RwLock<Box<dyn StatelessProtocol>>> = Arc::new(RwLock::new(Box::new(
         MinecraftQueryProtocol::new(|_, _| panic!("this should not be called"), true),
     )));
@@ -40,19 +46,22 @@ fn main() {
     {
         let mut protocol = protocol.write().unwrap();
         *protocol = match CONFIG.protocol {
-            Protocol::Raknet => Box::new(RaknetProtocol::new()),
+            Protocol::Raknet => Box::new(RaknetProtocol::new(handle_raknet)),
             Protocol::Query { fullstat } => {
                 Box::new(MinecraftQueryProtocol::new(handle_query, fullstat))
             }
         };
     }
-    println!("using protocol: {}", protocol.read().unwrap().name());
+    println!("Using protocol: {}", protocol.read().unwrap().name());
 
     // create scanner
+    println!("Scanning");
     let mut scanner = StatelessScanner::new(&interface, protocol.clone());
 
     scanner.scan(SocketAddrV4::new("192.168.2.120".parse().unwrap(), 19132));
+    println!("Scanner done, waiting for the last packets...");
     thread::sleep(Duration::from_secs(5));
+    println!("Done");
 }
 
 fn handle_query(addr: &SocketAddrV4, response: QueryResponse) {
@@ -84,4 +93,25 @@ fn handle_query(addr: &SocketAddrV4, response: QueryResponse) {
             println!("{output}");
         }
     }
+}
+
+fn handle_raknet(addr: &SocketAddrV4, response: RaknetReponse) {
+    let mut msg = format!(
+        "{addr}: GUID = {}, MOTD = `{}`,`{}`, PLAYERS = {}/{}, VERSION = {} {} (protocol v{}), GAMEMODE = {}",
+        response.guid,
+        response.motd,
+        response.sub_motd,
+        response.playercount,
+        response.maxplayers,
+        response.edition,
+        response.version,
+        response.protocol,
+        response.gamemode,
+    );
+
+    if let Some(extra) = response.extra {
+        msg += &format!(", GARBAGE = `{extra}`");
+    }
+
+    println!("{msg}");
 }

@@ -6,17 +6,16 @@ use std::{
 };
 
 use badscan::{
-    config::{Protocol, CONFIG},
+    config::{self, CONFIG},
     interface::MyInterface,
     protocols::{
-        query::{MinecraftQueryProtocol, QueryResponse},
-        raknet::{RaknetProtocol, RaknetReponse},
+        self, query::{MinecraftQueryProtocol, QueryResponse}, raknet::{RaknetProtocol, RaknetReponse}
     },
-    scanner::{StatelessProtocol, StatelessScanner},
+    scanner::StatelessScanner,
 };
 
 fn main() {
-    println!("Starting Badscan");
+    println!("Starting BadScan");
 
     // get interface to use
     println!("Getting interface...");
@@ -39,16 +38,14 @@ fn main() {
 
     // select protocol
     println!("Selecting protocol...");
-    let protocol: Arc<RwLock<Box<dyn StatelessProtocol>>> = Arc::new(RwLock::new(Box::new(
-        MinecraftQueryProtocol::new(|_, _| panic!("this should not be called"), true),
-    )));
+    let protocol: Arc<RwLock<protocols::Protocol>> = Default::default();
     set_protocol(protocol.clone(), &CONFIG.protocol);
-    
-    println!("Using protocol: {}", protocol.read().unwrap().name());
+
+    println!("Using protocol: {}", protocol.read().unwrap());
 
     // create scanner
-    println!("Scanning");
     let mut scanner = StatelessScanner::new(&interface, protocol.clone());
+    println!("Scanning started at {}", scanner.start_time.format("%H:%M %d-%m-%Y UTC"));
 
     scanner.scan(SocketAddrV4::new(
         "192.168.2.120".parse().unwrap(),
@@ -59,12 +56,13 @@ fn main() {
     println!("Done");
 }
 
-fn set_protocol(lock: Arc<RwLock<Box<dyn StatelessProtocol>>>, protocol: &Protocol) {
+fn set_protocol(lock: Arc<RwLock<protocols::Protocol>>, protocol: &config::Protocol) {
     let mut lock = lock.write().unwrap();
     *lock = match protocol {
-        &Protocol::Raknet => Box::new(RaknetProtocol::new(handle_raknet)),
-        &Protocol::Query { fullstat } => {
-            Box::new(MinecraftQueryProtocol::new(handle_query, fullstat))
+        &config::Protocol::Raknet => protocols::Protocol::Udp(Box::new(RaknetProtocol::new(handle_raknet))),
+        &config::Protocol::Query { fullstat } => {
+            protocols::Protocol::Udp(
+            Box::new(MinecraftQueryProtocol::new(handle_query, fullstat)))
         }
     };
 }

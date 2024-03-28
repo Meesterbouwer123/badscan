@@ -6,7 +6,7 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::scanner::StatelessProtocol;
+use crate::protocols::UdpProtocol;
 
 pub enum QueryResponse {
     Partial {
@@ -161,7 +161,7 @@ where
     }
 }
 
-impl<F> StatelessProtocol for MinecraftQueryProtocol<F>
+impl<F> UdpProtocol for MinecraftQueryProtocol<F>
 where
     F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync + Send,
 {

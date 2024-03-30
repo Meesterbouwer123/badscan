@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt::Display, io};
 
 use once_cell::sync::Lazy;
 use serde_derive::Deserialize;
@@ -9,6 +9,8 @@ pub struct Config {
     pub interface: Option<String>,
     pub scan: ScanConfig,
     pub protocol: Protocol,
+    #[serde(default)]
+    pub fingerprint: Fingerprint,
 }
 
 #[derive(Deserialize, Default)]
@@ -22,11 +24,27 @@ pub struct ScanConfig {
 pub enum Protocol {
     Query { fullstat: bool },
     Raknet,
+    SLP,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub enum Fingerprint {
+    #[default]
+    #[serde(rename = "Nintendo 3DS")]
+    Nintendo3DS, // funny :D
 }
 
 impl Default for Protocol {
     fn default() -> Self {
         Protocol::Query { fullstat: false }
+    }
+}
+
+impl Display for Fingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fingerprint::Nintendo3DS => write!(f, "Nintendo 3DS"),
+        }
     }
 }
 

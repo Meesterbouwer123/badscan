@@ -6,7 +6,12 @@ First you will need a machine to run this on, preferably Linux
 ###### If you want to run this on windows I recommend you to use WSL, it's easier to get it to work there
 
 Build this program using `cargo build --release`, and run the binary in target/release as sudo.
-You might need to firewall a port to avoid your OS from dropping packets, by for example using iptables.
+
+You will also need to firewall the port you use for scanning, else the OS will send an RST packet and break the connection.
+The following command will firewall it using iptables:
+```sh
+sudo iptables -A INPUT -p tcp --dport 61000 -j DROP
+```
 
 # FAQ
 ### Why the name?

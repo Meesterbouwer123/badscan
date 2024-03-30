@@ -1,0 +1,85 @@
+
+                        }
+                        Protocol::Tcp(proto) => {
+                            if packet.get_next_level_protocol() != IpNextHeaderProtocols::Tcp {
+                                println!(
+                                    "Invalid next level protocol while scanning TCP: {}",
+                                    packet.get_next_level_protocol()
+                                );
+                                continue;
+                            }
+
+                            let tcp_packet = TcpPacket::new(packet.payload()).unwrap();
+                            let source =
+                                SocketAddrV4::new(packet.get_source(), tcp_packet.get_source());
+                            let dest = SocketAddrV4::new(
+                                packet.get_destination(),
+                                tcp_packet.get_destination(),
+                            );
+                            let cookie = Self::cookie(&source, &start_time);
+                            println!(
+                                "Got TCP packet from {}:{}, flags = {:b}",
+                                packet.get_source(),
+                                tcp_packet.get_source(),
+                                tcp_packet.get_flags()
+                            );
+
+                            // SYN-ACK
+                            if tcp_packet.get_flags() & TcpFlags::SYN != 0
+                                && tcp_packet.get_flags() & TcpFlags::ACK != 0
+                            {
+                                // validate cookie
+                                if tcp_packet.get_acknowledgement() != cookie + 1 {
+                                    println!(
+                                        "Invalid cookie! expected {} but got {}",
+                                        cookie + 1,
+                                        tcp_packet.get_acknowledgement()
+                                    );
+                                    // send RST back
+                                    println!("Sending RST back");
+                                    let rst = fingerprint.read().unwrap().get_rst().create(
+                                        &dest,
+                                        &source,
+                                        tcp_packet.get_acknowledgement(),
+                                        tcp_packet.get_sequence() + 1,
+                                        &[],
+                                    );
+                                    packet_send
+                                        .send((source, rst, IpNextHeaderProtocols::Tcp))
+                                        .unwrap();
+                                    continue;
+                                }
+
+                                // sending ACK
+                                // apparently the sequence and the acknowledgement need to be swapped, no clue why
+                                let ack = fingerprint.read().unwrap().get_ack().create(
+                                    &dest,
+                                    &source,
+                                    tcp_packet.get_acknowledgement(),
+                                    tcp_packet.get_sequence() + 1,
+                                    &[],
+                                );
+
+                                packet_send
+                                    .send((source, ack, IpNextHeaderProtocols::Tcp))
+                                    .unwrap();
+
+                                if let Some(data) = proto.initial_packet(&source) {
+                                    // send data
+                                    let packet = fingerprint.read().unwrap().get_psh().create(
+                                        &dest,
+                                        &source,
+                                        tcp_packet.get_acknowledgement(),
+                                        tcp_packet.get_sequence() + 1,
+                                        &data,
+                                    );
+                                    packet_send
+                                        .send((source, packet, IpNextHeaderProtocols::Tcp))
+                                        .unwrap();
+                                }
+                            } else if tcp_packet.get_flags() & TcpFlags::RST != 0 {
+                                println!("RST :(");
+                            } else {
+                                println!("Unknown flags: {:b}", tcp_packet.get_flags());
+                            }
+                        }

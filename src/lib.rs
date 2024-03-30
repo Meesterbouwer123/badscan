@@ -2,7 +2,9 @@
 // this avoids having to write these mod statements in the main.rs file
 // (yes it's purely asthetic)
 pub mod config;
+pub mod fingerprint;
 pub mod interface;
 pub mod protocols;
-pub mod scanner;
+pub mod tcp;
+pub mod udpscanner;
 pub mod utils;

@@ -13,7 +13,14 @@ interface = "eth0"  # linux format
 #protocol = {t = "Query", c = {fullstat = true}}
 
 # Raknet
-protocol = {t = "Raknet"}
+#protocol = {t = "Raknet"}
+
+# Server list ping
+protocol = {t = "SLP"}
+
+# the fingerprint to scan with
+# this defaults to the Nintendo 3DS (at least that's how p0f) sees it
+fingerprint = "Nintendo 3DS"
 
 [scan]
 # key to avoid attackers from injecting fake responses

@@ -7,11 +7,15 @@ use std::{
 
 use badscan::{
     config::{self, CONFIG},
+    fingerprint,
     interface::MyInterface,
     protocols::{
-        self, query::{MinecraftQueryProtocol, QueryResponse}, raknet::{RaknetProtocol, RaknetReponse}
+        self,
+        query::{MinecraftQueryProtocol, QueryResponse},
+        raknet::{RaknetProtocol, RaknetReponse},
+        slp::MinecraftSlpProtocol,
     },
-    scanner::StatelessScanner,
+    udpscanner::UdpScanner,
 };
 
 fn main() {
@@ -40,17 +44,34 @@ fn main() {
     println!("Selecting protocol...");
     let protocol: Arc<RwLock<protocols::Protocol>> = Default::default();
     set_protocol(protocol.clone(), &CONFIG.protocol);
+    // select fingerprint
+    let fingerprint: Arc<RwLock<fingerprint::Fingerprint>> = Default::default();
+    set_fingerprint(fingerprint.clone(), &CONFIG.fingerprint);
 
-    println!("Using protocol: {}", protocol.read().unwrap());
+    println!(
+        "Using protocol: {} with fingerprint {:?}",
+        protocol.read().unwrap(),
+        CONFIG.fingerprint
+    );
 
     // create scanner
-    let mut scanner = StatelessScanner::new(&interface, protocol.clone());
-    println!("Scanning started at {}", scanner.start_time.format("%H:%M %d-%m-%Y UTC"));
+    match &*protocol.read().unwrap() {
+        protocols::Protocol::Udp(proto) => {
+            let protocol = Arc::new(*proto.clone());
+            let mut scanner = UdpScanner::new(&interface, protocol.clone(), fingerprint.clone());
+            println!(
+                "Scanning started at {}",
+                scanner.start_time.format("%H:%M %d-%m-%Y UTC")
+            );
 
-    scanner.scan(SocketAddrV4::new(
-        "192.168.2.120".parse().unwrap(),
-        protocol.read().unwrap().default_port(),
-    ));
+            scanner.scan(SocketAddrV4::new(
+                "192.168.2.120".parse().unwrap(),
+                protocol.default_port(),
+            ));
+        }
+        protocols::Protocol::Tcp(_) => todo!("re-add TCP scanning"),
+    }
+
     println!("Scanner done, waiting for the last packets...");
     thread::sleep(Duration::from_secs(CONFIG.scan.wait_delay));
     println!("Done");
@@ -59,11 +80,20 @@ fn main() {
 fn set_protocol(lock: Arc<RwLock<protocols::Protocol>>, protocol: &config::Protocol) {
     let mut lock = lock.write().unwrap();
     *lock = match protocol {
-        &config::Protocol::Raknet => protocols::Protocol::Udp(Box::new(RaknetProtocol::new(handle_raknet))),
-        &config::Protocol::Query { fullstat } => {
-            protocols::Protocol::Udp(
-            Box::new(MinecraftQueryProtocol::new(handle_query, fullstat)))
+        &config::Protocol::Raknet => {
+            protocols::Protocol::Udp(Box::new(RaknetProtocol::new(handle_raknet)))
         }
+        &config::Protocol::Query { fullstat } => protocols::Protocol::Udp(Box::new(
+            MinecraftQueryProtocol::new(handle_query, fullstat),
+        )),
+        &config::Protocol::SLP => protocols::Protocol::Tcp(Box::new(MinecraftSlpProtocol::new())),
+    };
+}
+
+fn set_fingerprint(lock: Arc<RwLock<fingerprint::Fingerprint>>, fingerprint: &config::Fingerprint) {
+    let mut lock = lock.write().unwrap();
+    *lock = match fingerprint {
+        &config::Fingerprint::Nintendo3DS => fingerprint::Fingerprint::nintendo_3ds(),
     };
 }
 

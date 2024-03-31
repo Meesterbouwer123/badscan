@@ -55,9 +55,10 @@ fn main() {
     );
 
     // create scanner
-    match &*protocol.read().unwrap() {
-        protocols::Protocol::Udp(proto) => {
-            let protocol = Arc::new(*proto.clone());
+    let lock = protocol.read().unwrap();
+    match &*lock {
+        &protocols::Protocol::Udp(proto) => {
+            let protocol = Arc::new(proto);
             let mut scanner = UdpScanner::new(&interface, protocol.clone(), fingerprint.clone());
             println!(
                 "Scanning started at {}",
@@ -69,7 +70,7 @@ fn main() {
                 protocol.default_port(),
             ));
         }
-        protocols::Protocol::Tcp(_) => todo!("re-add TCP scanning"),
+        &protocols::Protocol::Tcp(_) => todo!("re-add TCP scanning"),
     }
 
     println!("Scanner done, waiting for the last packets...");

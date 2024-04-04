@@ -6,8 +6,6 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::protocols::UdpProtocol;
-
 pub enum QueryResponse {
     Partial {
         motd: String,
@@ -143,114 +141,84 @@ impl QueryResponse {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MinecraftQueryProtocol<F>
-where
-    F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync,
-{
-    callback: F,
+pub fn initial_packet(_addr: &SocketAddrV4, cookie: u32) -> Vec<u8> {
+    let mut packet = vec![];
+    packet.extend_from_slice(&[0xFE, 0xFD]); // magic
+    packet.extend_from_slice(&[0x09]); // intention = handshake
+    packet.extend_from_slice(&cookie.to_be_bytes()); // session ID
+
+    packet
+}
+
+pub fn handle_packet(
+    send_back: &dyn Fn(Vec<u8>),
+    source: &SocketAddrV4,
+    cookie: u32,
+    packet: &[u8],
     fullstat: bool,
-}
-
-impl<F> MinecraftQueryProtocol<F>
-where
-    F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync,
-{
-    pub fn new(callback: F, fullstat: bool) -> Self {
-        Self { callback, fullstat }
-    }
-}
-
-impl<F> UdpProtocol for MinecraftQueryProtocol<F>
-where
-    F: Fn(&SocketAddrV4, QueryResponse) + Clone + Sync + Send,
-{
-    fn initial_packet(&self, _addr: &SocketAddrV4, cookie: u32) -> Vec<u8> {
-        let mut packet = vec![];
-        packet.extend_from_slice(&[0xFE, 0xFD]); // magic
-        packet.extend_from_slice(&[0x09]); // intention = handshake
-        packet.extend_from_slice(&cookie.to_be_bytes()); // session ID
-
-        packet
+    callback: &dyn Fn(&SocketAddrV4, QueryResponse),
+) {
+    // check if packet can contains enough data
+    if packet.len() < 5 {
+        return;
     }
 
-    fn handle_packet(
-        &self,
-        send_back: &dyn Fn(Vec<u8>),
-        source: &SocketAddrV4,
-        cookie: u32,
-        packet: &[u8],
-    ) {
-        // check if packet can contains enough data
-        if packet.len() < 5 {
-            return;
-        }
+    let id = cookie & 0x0F0F0F0F;
+    // make sure ID is correct
+    if id.to_be_bytes() != packet[1..=4] {
+        println!(
+            "{:?} != {}",
+            id.to_be_bytes(),
+            packet[1..=4]
+                .iter()
+                .map(|c| format!("{:X}", c))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        return;
+    }
 
-        let id = cookie & 0x0F0F0F0F;
-        // make sure ID is correct
-        if id.to_be_bytes() != packet[1..=4] {
-            println!(
-                "{:?} != {}",
-                id.to_be_bytes(),
-                packet[1..=4]
-                    .iter()
-                    .map(|c| format!("{:X}", c))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
-            return;
-        }
-
-        match packet[0] {
-            0x09 => {
-                // challenge
-                if packet.len() < 6 {
-                    return;
-                }
-
-                let mut token: u32 = 0;
-                for i in 5..packet.len() {
-                    if i == packet.len() - 1 && packet[i] == 0 {
-                        break; // we are done
-                    }
-                    let digit_char = packet[i] as char;
-                    let digit: u32 = match digit_char.to_string().parse() {
-                        Ok(val) => val,
-                        Err(_) => return,
-                    };
-                    token = token * 10 + digit;
-                }
-
-                // send response packet back
-                let mut packet = vec![];
-                packet.extend_from_slice(&[0xFE, 0xFD]); // magic
-                packet.extend_from_slice(&[0x00]); // intention = handshake
-                packet.extend_from_slice(&id.to_be_bytes()); // session ID
-                packet.extend_from_slice(&token.to_be_bytes()); // challenge token
-                if self.fullstat {
-                    packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // padding
-                }
-
-                send_back(packet);
+    match packet[0] {
+        0x09 => {
+            // challenge
+            if packet.len() < 6 {
+                return;
             }
-            0x00 => {
-                // response
-                if let Ok(response) = QueryResponse::parse_response(packet, self.fullstat) {
-                    (self.callback)(source, response);
+
+            let mut token: u32 = 0;
+            for i in 5..packet.len() {
+                if i == packet.len() - 1 && packet[i] == 0 {
+                    break; // we are done
                 }
+                let digit_char = packet[i] as char;
+                let digit: u32 = match digit_char.to_string().parse() {
+                    Ok(val) => val,
+                    Err(_) => return,
+                };
+                token = token * 10 + digit;
             }
-            _ => {
-                println!("Unknown packet ID {:X}! (data: {packet:?})", packet[0])
+
+            // send response packet back
+            let mut packet = vec![];
+            packet.extend_from_slice(&[0xFE, 0xFD]); // magic
+            packet.extend_from_slice(&[0x00]); // intention = handshake
+            packet.extend_from_slice(&id.to_be_bytes()); // session ID
+            packet.extend_from_slice(&token.to_be_bytes()); // challenge token
+            if fullstat {
+                packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // padding
+            }
+
+            send_back(packet);
+        }
+        0x00 => {
+            // response
+            if let Ok(response) = QueryResponse::parse_response(packet, fullstat) {
+                (callback)(source, response);
             }
         }
-    }
-
-    fn name(&self) -> String {
-        "Query".to_string()
-    }
-
-    fn default_port(&self) -> u16 {
-        25565
+        _ => {
+            println!("Unknown packet ID {:X}! (data: {packet:?})", packet[0])
+        }
     }
 }
 

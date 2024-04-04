@@ -22,16 +22,12 @@ use pnet::{
 };
 
 use crate::{
-    config::CONFIG,
-    fingerprint::Fingerprint,
-    interface::MyInterface,
-    protocols::UdpProtocol,
-    utils,
+    config::CONFIG, fingerprint::Fingerprint, interface::MyInterface, protocols::UdpProtocol, utils,
 };
 
 pub struct UdpScanner {
     _interface: MyInterface,
-    protocol: Arc<Box<dyn UdpProtocol>>,
+    protocol: Arc<UdpProtocol>,
     _send_thread: JoinHandle<()>,
     _recv_thread: JoinHandle<()>,
     packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
@@ -44,7 +40,7 @@ const IPV4_HEADER_SIZE: usize = 20;
 impl<'a> UdpScanner {
     pub fn new(
         interface: &'a MyInterface,
-        protocol: Arc<Box<dyn UdpProtocol>>,
+        protocol: Arc<UdpProtocol>,
         fingerprint: Arc<RwLock<Fingerprint>>,
     ) -> UdpScanner {
         let interface = interface.clone();
@@ -73,13 +69,7 @@ impl<'a> UdpScanner {
             let start_time = start_time.clone();
             thread::spawn(move || {
                 // receive packets
-                Self::recv_thread(
-                    interface,
-                    network_rx,
-                    protocol,
-                    packet_send,
-                    start_time,
-                )
+                Self::recv_thread(interface, network_rx, protocol, packet_send, start_time)
             })
         };
 
@@ -139,7 +129,7 @@ impl<'a> UdpScanner {
     fn recv_thread(
         interface: MyInterface,
         mut rx: Box<dyn DataLinkReceiver>,
-        protocol: Arc<Box<dyn UdpProtocol>>,
+        protocol: Arc<UdpProtocol>,
         packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
         start_time: DateTime<Utc>,
     ) {
@@ -175,11 +165,7 @@ impl<'a> UdpScanner {
                     let cookie = Self::cookie(&source, &start_time);
 
                     protocol.handle_packet(
-                        &|packet: Vec<u8>| {
-                            packet_send
-                                .send((source, packet))
-                                .unwrap()
-                        },
+                        &|packet: Vec<u8>| packet_send.send((source, packet)).unwrap(),
                         &source,
                         cookie,
                         udp.payload(),

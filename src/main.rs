@@ -11,8 +11,8 @@ use badscan::{
     interface::MyInterface,
     protocols::{
         self,
-        query::{MinecraftQueryProtocol, QueryResponse},
-        raknet::{RaknetProtocol, RaknetReponse},
+        query::QueryResponse,
+        raknet::RaknetReponse,
         slp::MinecraftSlpProtocol,
     },
     udpscanner::UdpScanner,
@@ -54,23 +54,24 @@ fn main() {
         CONFIG.fingerprint
     );
 
+    let ranges = SocketAddrV4::new(
+        "192.168.2.120".parse().unwrap(),
+        protocol.read().unwrap().default_port(),
+    );
+
     // create scanner
     let lock = protocol.read().unwrap();
     match &*lock {
-        &protocols::Protocol::Udp(proto) => {
-            let protocol = Arc::new(proto);
-            let mut scanner = UdpScanner::new(&interface, protocol.clone(), fingerprint.clone());
+        protocols::Protocol::Udp(proto) => {
+            let mut scanner = UdpScanner::new(&interface, proto.clone(), fingerprint.clone());
             println!(
                 "Scanning started at {}",
                 scanner.start_time.format("%H:%M %d-%m-%Y UTC")
             );
 
-            scanner.scan(SocketAddrV4::new(
-                "192.168.2.120".parse().unwrap(),
-                protocol.default_port(),
-            ));
+            scanner.scan(ranges);
         }
-        &protocols::Protocol::Tcp(_) => todo!("re-add TCP scanning"),
+        protocols::Protocol::Tcp(_) => todo!("re-add TCP scanning"),
     }
 
     println!("Scanner done, waiting for the last packets...");
@@ -82,11 +83,9 @@ fn set_protocol(lock: Arc<RwLock<protocols::Protocol>>, protocol: &config::Proto
     let mut lock = lock.write().unwrap();
     *lock = match protocol {
         &config::Protocol::Raknet => {
-            protocols::Protocol::Udp(Box::new(RaknetProtocol::new(handle_raknet)))
+            protocols::Protocol::Udp(Arc::new(protocols::UdpProtocol::Raknet { callback: Box::new(handle_raknet) }))
         }
-        &config::Protocol::Query { fullstat } => protocols::Protocol::Udp(Box::new(
-            MinecraftQueryProtocol::new(handle_query, fullstat),
-        )),
+        &config::Protocol::Query { fullstat } => protocols::Protocol::Udp(Arc::new(protocols::UdpProtocol::McQuery { callback: Box::new(handle_query), fullstat })),
         &config::Protocol::SLP => protocols::Protocol::Tcp(Box::new(MinecraftSlpProtocol::new())),
     };
 }

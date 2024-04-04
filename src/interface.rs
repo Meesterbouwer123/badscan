@@ -76,7 +76,7 @@ impl MyInterface {
         // wrap into ethernet
         let packet = match self.gateway_mac {
             Some(dest) => {
-                let mut ethernet_buf = [0u8; 1024 + 20]; // ethernet header should be 20 bytes
+                let mut ethernet_buf = vec![0u8; packet.len() + 20]; // ethernet header should be 20 bytes
 
                 let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buf).unwrap();
                 ethernet_packet.set_destination(dest);

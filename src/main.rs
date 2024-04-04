@@ -9,12 +9,8 @@ use badscan::{
     config::{self, CONFIG},
     fingerprint,
     interface::MyInterface,
-    protocols::{
-        self,
-        query::QueryResponse,
-        raknet::RaknetReponse,
-        slp::MinecraftSlpProtocol,
-    },
+    protocols::{self, query::QueryResponse, raknet::RaknetReponse, slp::MinecraftSlpProtocol},
+    tcpscanner::TcpScanner,
     udpscanner::UdpScanner,
 };
 
@@ -63,7 +59,8 @@ fn main() {
     let lock = protocol.read().unwrap();
     match &*lock {
         protocols::Protocol::Udp(proto) => {
-            let mut scanner = UdpScanner::new(&interface, proto.clone(), fingerprint.clone());
+            let mut scanner =
+                UdpScanner::new(&interface, proto.clone(), &fingerprint.read().unwrap());
             println!(
                 "Scanning started at {}",
                 scanner.start_time.format("%H:%M %d-%m-%Y UTC")
@@ -71,7 +68,16 @@ fn main() {
 
             scanner.scan(ranges);
         }
-        protocols::Protocol::Tcp(_) => todo!("re-add TCP scanning"),
+        protocols::Protocol::Tcp(proto) => {
+            let mut scanner =
+                TcpScanner::new(&interface, proto.clone(), &*fingerprint.read().unwrap());
+            println!(
+                "TCP Scanning started at {}",
+                scanner.start_time.format("%H:%M %d-%m-%Y UTC")
+            );
+
+            scanner.scan(ranges);
+        }
     }
 
     println!("Scanner done, waiting for the last packets...");
@@ -83,10 +89,17 @@ fn set_protocol(lock: Arc<RwLock<protocols::Protocol>>, protocol: &config::Proto
     let mut lock = lock.write().unwrap();
     *lock = match protocol {
         &config::Protocol::Raknet => {
-            protocols::Protocol::Udp(Arc::new(protocols::UdpProtocol::Raknet { callback: Box::new(handle_raknet) }))
+            protocols::Protocol::Udp(Arc::new(protocols::UdpProtocol::Raknet {
+                callback: Box::new(handle_raknet),
+            }))
         }
-        &config::Protocol::Query { fullstat } => protocols::Protocol::Udp(Arc::new(protocols::UdpProtocol::McQuery { callback: Box::new(handle_query), fullstat })),
-        &config::Protocol::SLP => protocols::Protocol::Tcp(Box::new(MinecraftSlpProtocol::new())),
+        &config::Protocol::Query { fullstat } => {
+            protocols::Protocol::Udp(Arc::new(protocols::UdpProtocol::McQuery {
+                callback: Box::new(handle_query),
+                fullstat,
+            }))
+        }
+        &config::Protocol::SLP => protocols::Protocol::Tcp(Arc::new(MinecraftSlpProtocol::new())),
     };
 }
 

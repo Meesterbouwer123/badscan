@@ -8,7 +8,7 @@ pub mod slp;
 
 pub enum Protocol {
     Udp(Arc<UdpProtocol>),
-    Tcp(Box<dyn TcpProtocol>),
+    Tcp(Arc<dyn TcpProtocol>),
 }
 
 impl Display for Protocol {
@@ -69,21 +69,30 @@ pub enum UdpProtocol {
 impl UdpProtocol {
     pub fn name(&self) -> String {
         match self {
-            UdpProtocol::McQuery { callback: _, fullstat: _ } => "Query".to_string(),
+            UdpProtocol::McQuery {
+                callback: _,
+                fullstat: _,
+            } => "Query".to_string(),
             UdpProtocol::Raknet { callback: _ } => "Raknet".to_string(),
         }
     }
 
     pub fn default_port(&self) -> u16 {
         match self {
-            UdpProtocol::McQuery { callback: _, fullstat: _ } => 25565,
+            UdpProtocol::McQuery {
+                callback: _,
+                fullstat: _,
+            } => 25565,
             UdpProtocol::Raknet { callback: _ } => 19132,
         }
     }
 
     pub fn initial_packet(&self, addr: &SocketAddrV4, cookie: u32) -> Vec<u8> {
         match self {
-            UdpProtocol::McQuery { callback: _, fullstat: _ } => query::initial_packet(addr, cookie),
+            UdpProtocol::McQuery {
+                callback: _,
+                fullstat: _,
+            } => query::initial_packet(addr, cookie),
             UdpProtocol::Raknet { callback: _ } => raknet::initial_packet(addr, cookie),
         }
     }
@@ -99,7 +108,9 @@ impl UdpProtocol {
             UdpProtocol::McQuery { callback, fullstat } => {
                 query::handle_packet(send_back, source, cookie, packet, *fullstat, callback)
             }
-            UdpProtocol::Raknet { callback } => raknet::handle_packet(send_back, source, cookie, packet, callback),
+            UdpProtocol::Raknet { callback } => {
+                raknet::handle_packet(send_back, source, cookie, packet, callback)
+            }
         }
     }
 }

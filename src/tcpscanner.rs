@@ -16,33 +16,33 @@ use pnet::{
         ethernet::{EtherTypes, EthernetPacket},
         ip::IpNextHeaderProtocols,
         ipv4::{self, Ipv4Flags, Ipv4Packet, MutableIpv4Packet},
-        udp::UdpPacket,
+        tcp::{TcpFlags, TcpPacket},
         Packet,
     },
 };
 
 use crate::{
-    config::CONFIG, fingerprint::Fingerprint, interface::MyInterface, protocols::UdpProtocol, utils,
+    config::CONFIG, fingerprint::Fingerprint, interface::MyInterface, protocols::TcpProtocol,
 };
 
-pub struct UdpScanner {
+pub struct TcpScanner {
     _interface: MyInterface,
-    protocol: Arc<UdpProtocol>,
     _send_thread: JoinHandle<()>,
     _recv_thread: JoinHandle<()>,
     packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
     pub start_time: DateTime<Utc>,
     source_ip: Ipv4Addr,
+    fingerprint: Fingerprint,
 }
 
 const IPV4_HEADER_SIZE: usize = 20;
 
-impl<'a> UdpScanner {
+impl<'a> TcpScanner {
     pub fn new(
         interface: &'a MyInterface,
-        protocol: Arc<UdpProtocol>,
+        protocol: Arc<dyn TcpProtocol>,
         fingerprint: &Fingerprint,
-    ) -> UdpScanner {
+    ) -> TcpScanner {
         let interface = interface.clone();
         let start_time = Utc::now();
         let IpAddr::V4(source_ip) = interface.get_source_ip() else {
@@ -67,9 +67,17 @@ impl<'a> UdpScanner {
             let protocol = protocol.clone();
             let packet_send = packet_send_tx.clone();
             let start_time = start_time.clone();
+            let fingerprint = fingerprint.clone();
             thread::spawn(move || {
                 // receive packets
-                Self::recv_thread(interface, network_rx, protocol, packet_send, start_time)
+                Self::recv_thread(
+                    interface,
+                    network_rx,
+                    protocol,
+                    packet_send,
+                    start_time,
+                    &fingerprint,
+                )
             })
         };
 
@@ -90,12 +98,12 @@ impl<'a> UdpScanner {
 
         Self {
             _interface: interface,
-            protocol,
             _send_thread: send_thread,
             _recv_thread: recv_thread,
             packet_send: packet_send_tx,
             start_time,
             source_ip,
+            fingerprint: fingerprint.clone(),
         }
     }
 
@@ -103,7 +111,10 @@ impl<'a> UdpScanner {
         // send initial packet
         let cookie = Self::cookie(&addr, &self.start_time);
         let source = SocketAddrV4::new(self.source_ip, 61000);
-        let packet = utils::wrap_udp(self.protocol.initial_packet(&addr, cookie), &source, &addr);
+        let packet = self
+            .fingerprint
+            .get_syn()
+            .create(&source, &addr, cookie, 0, &[]);
 
         self.send_to(addr, packet);
     }
@@ -129,9 +140,10 @@ impl<'a> UdpScanner {
     fn recv_thread(
         interface: MyInterface,
         mut rx: Box<dyn DataLinkReceiver>,
-        protocol: Arc<UdpProtocol>,
+        protocol: Arc<dyn TcpProtocol>,
         packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
         start_time: DateTime<Utc>,
+        fingerprint: &Fingerprint,
     ) {
         loop {
             match rx.next() {
@@ -150,26 +162,91 @@ impl<'a> UdpScanner {
                     };
 
                     // nothing wrong with using &* :D
-                    if packet.get_next_level_protocol() != IpNextHeaderProtocols::Udp {
+                    if packet.get_next_level_protocol() != IpNextHeaderProtocols::Tcp {
                         println!(
-                            "Invalid next level protocol while scanning UDP: {}",
+                            "Invalid next level protocol while scanning TCP: {}",
                             packet.get_next_level_protocol()
                         );
                         continue;
                     }
 
-                    let udp = UdpPacket::new(packet.payload()).unwrap();
-
-                    let source = SocketAddrV4::new(packet.get_source(), udp.get_source());
-
+                    let tcp_packet = TcpPacket::new(packet.payload()).unwrap();
+                    let source = SocketAddrV4::new(packet.get_source(), tcp_packet.get_source());
+                    let dest =
+                        SocketAddrV4::new(packet.get_destination(), tcp_packet.get_destination());
                     let cookie = Self::cookie(&source, &start_time);
-
-                    protocol.handle_packet(
-                        &|packet: Vec<u8>| packet_send.send((source, packet)).unwrap(),
-                        &source,
-                        cookie,
-                        udp.payload(),
+                    println!(
+                        "Got TCP packet from {}:{}, flags = {:b}",
+                        packet.get_source(),
+                        tcp_packet.get_source(),
+                        tcp_packet.get_flags()
                     );
+
+                    // SYN-ACK
+                    if tcp_packet.get_flags() & TcpFlags::SYN != 0
+                        && tcp_packet.get_flags() & TcpFlags::ACK != 0
+                    {
+                        // validate cookie
+                        if tcp_packet.get_acknowledgement() != cookie + 1 {
+                            println!(
+                                "Invalid cookie! expected {} but got {}",
+                                cookie + 1,
+                                tcp_packet.get_acknowledgement()
+                            );
+                            // send RST back
+                            println!("Sending RST back");
+                            let rst = fingerprint.get_rst().create(
+                                &dest,
+                                &source,
+                                tcp_packet.get_acknowledgement(),
+                                tcp_packet.get_sequence() + 1,
+                                &[],
+                            );
+                            packet_send.send((source, rst)).unwrap();
+                            continue;
+                        }
+
+                        // sending ACK
+                        // apparently the sequence and the acknowledgement need to be swapped, no clue why
+                        let ack = fingerprint.get_ack().create(
+                            &dest,
+                            &source,
+                            tcp_packet.get_acknowledgement(),
+                            tcp_packet.get_sequence() + 1,
+                            &[],
+                        );
+
+                        packet_send.send((source, ack)).unwrap();
+
+                        if let Some(data) = protocol.initial_packet(&source) {
+                            // send data
+                            let packet = fingerprint.get_psh().create(
+                                &dest,
+                                &source,
+                                tcp_packet.get_acknowledgement(),
+                                tcp_packet.get_sequence() + 1,
+                                &data,
+                            );
+                            packet_send.send((source, packet)).unwrap();
+                        }
+                    } else if !tcp_packet.payload().is_empty() {
+                        println!("data: {:?}", tcp_packet.payload());
+
+                        // ack this data
+                        let ack = fingerprint.get_ack().create(
+                            &dest,
+                            &source,
+                            tcp_packet.get_acknowledgement(),
+                            tcp_packet.get_sequence() + tcp_packet.payload().len() as u32,
+                            &[],
+                        );
+
+                        packet_send.send((source, ack)).unwrap();
+                    } else if tcp_packet.get_flags() & TcpFlags::RST != 0 {
+                        println!("RST :(");
+                    } else {
+                        println!("Unknown flags: {:b}", tcp_packet.get_flags());
+                    }
                 }
                 Err(_) => todo!(),
             }
@@ -203,7 +280,7 @@ impl<'a> UdpScanner {
             ipv4_packet.set_flags(Ipv4Flags::DontFragment); // please, it would make it so much easier
             ipv4_packet.set_header_length(IPV4_HEADER_SIZE as u8 / 4);
             ipv4_packet.set_ttl(fingerprint.ittl);
-            ipv4_packet.set_next_level_protocol(IpNextHeaderProtocols::Udp);
+            ipv4_packet.set_next_level_protocol(IpNextHeaderProtocols::Tcp);
             ipv4_packet.set_total_length(
                 (packet.len() + 4 * ipv4_packet.get_header_length() as usize) as u16,
             );

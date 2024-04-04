@@ -6,5 +6,6 @@ pub mod fingerprint;
 pub mod interface;
 pub mod protocols;
 pub mod tcp;
+pub mod tcpscanner;
 pub mod udpscanner;
 pub mod utils;

@@ -9,7 +9,12 @@ use badscan::{
     config::{self, CONFIG},
     fingerprint,
     interface::MyInterface,
-    protocols::{self, query::QueryResponse, raknet::RaknetReponse, slp::MinecraftSlpProtocol},
+    protocols::{
+        self,
+        query::QueryResponse,
+        raknet::RaknetReponse,
+        slp::MinecraftSlpProtocol,
+    },
     tcpscanner::TcpScanner,
     udpscanner::UdpScanner,
 };
@@ -38,7 +43,7 @@ fn main() {
 
     // select protocol
     println!("Selecting protocol...");
-    let protocol: Arc<RwLock<protocols::Protocol>> = Default::default();
+    let protocol: Arc<RwLock<protocols::Protocol<T>>> = Default::default();
     set_protocol(protocol.clone(), &CONFIG.protocol);
     // select fingerprint
     let fingerprint: Arc<RwLock<fingerprint::Fingerprint>> = Default::default();
@@ -85,7 +90,7 @@ fn main() {
     println!("Done");
 }
 
-fn set_protocol(lock: Arc<RwLock<protocols::Protocol>>, protocol: &config::Protocol) {
+fn set_protocol<T>(lock: Arc<RwLock<protocols::Protocol<T>>>, protocol: &config::Protocol) {
     let mut lock = lock.write().unwrap();
     *lock = match protocol {
         &config::Protocol::Raknet => {

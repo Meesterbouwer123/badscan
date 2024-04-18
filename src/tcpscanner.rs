@@ -1,10 +1,10 @@
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{hash_map::DefaultHasher, HashMap},
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
     sync::{
         mpsc::{self, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
 };
@@ -25,7 +25,10 @@ use crate::{
     config::CONFIG, fingerprint::Fingerprint, interface::MyInterface, protocols::TcpProtocol,
 };
 
-pub struct TcpScanner {
+pub struct TcpScanner<T>
+where
+    T: Default,
+{
     _interface: MyInterface,
     _send_thread: JoinHandle<()>,
     _recv_thread: JoinHandle<()>,
@@ -33,21 +36,37 @@ pub struct TcpScanner {
     pub start_time: DateTime<Utc>,
     source_ip: Ipv4Addr,
     fingerprint: Fingerprint,
+    _state: Arc<Mutex<HashMap<SocketAddrV4, TcpState<T>>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TcpState<T>
+where
+    T: Default,
+{
+    // the data we already received
+    pub data: Vec<u8>,
+    // the insternal state that the protocol parsed
+    pub internal: T,
 }
 
 const IPV4_HEADER_SIZE: usize = 20;
 
-impl<'a> TcpScanner {
+impl<'a, T> TcpScanner<T>
+where
+    T: Default + Send + 'static,
+{
     pub fn new(
         interface: &'a MyInterface,
-        protocol: Arc<dyn TcpProtocol>,
+        protocol: Arc<dyn TcpProtocol<T>>,
         fingerprint: &Fingerprint,
-    ) -> TcpScanner {
+    ) -> TcpScanner<T> {
         let interface = interface.clone();
         let start_time = Utc::now();
         let IpAddr::V4(source_ip) = interface.get_source_ip() else {
             panic!("No ipv4 source address!")
         };
+        let connection_states = Arc::new(Mutex::new(HashMap::new()));
 
         let (network_tx, network_rx) =
             match datalink::channel(&interface.network_interface, Default::default())
@@ -68,6 +87,7 @@ impl<'a> TcpScanner {
             let packet_send = packet_send_tx.clone();
             let start_time = start_time.clone();
             let fingerprint = fingerprint.clone();
+            let connection_states = connection_states.clone();
             thread::spawn(move || {
                 // receive packets
                 Self::recv_thread(
@@ -77,6 +97,7 @@ impl<'a> TcpScanner {
                     packet_send,
                     start_time,
                     &fingerprint,
+                    connection_states,
                 )
             })
         };
@@ -104,6 +125,7 @@ impl<'a> TcpScanner {
             start_time,
             source_ip,
             fingerprint: fingerprint.clone(),
+            _state: connection_states.clone(),
         }
     }
 
@@ -140,10 +162,11 @@ impl<'a> TcpScanner {
     fn recv_thread(
         interface: MyInterface,
         mut rx: Box<dyn DataLinkReceiver>,
-        protocol: Arc<dyn TcpProtocol>,
+        protocol: Arc<dyn TcpProtocol<T>>,
         packet_send: Sender<(SocketAddrV4, Vec<u8>)>,
         start_time: DateTime<Utc>,
         fingerprint: &Fingerprint,
+        connection_states: Arc<Mutex<HashMap<SocketAddrV4, TcpState<T>>>>,
     ) {
         loop {
             match rx.next() {
@@ -161,7 +184,6 @@ impl<'a> TcpScanner {
                         continue;
                     };
 
-                    // nothing wrong with using &* :D
                     if packet.get_next_level_protocol() != IpNextHeaderProtocols::Tcp {
                         println!(
                             "Invalid next level protocol while scanning TCP: {}",
@@ -229,19 +251,33 @@ impl<'a> TcpScanner {
                             );
                             packet_send.send((source, packet)).unwrap();
                         }
+
+                        connection_states
+                            .lock()
+                            .unwrap()
+                            .insert(source, Default::default());
                     } else if !tcp_packet.payload().is_empty() {
                         println!("data: {:?}", tcp_packet.payload());
 
-                        // ack this data
-                        let ack = fingerprint.get_ack().create(
-                            &dest,
-                            &source,
-                            tcp_packet.get_acknowledgement(),
-                            tcp_packet.get_sequence() + tcp_packet.payload().len() as u32,
-                            &[],
-                        );
+                        if let Some(state) = connection_states.lock().unwrap().get_mut(&source) {
+                            // ack this data
+                            let ack = fingerprint.get_ack().create(
+                                &dest,
+                                &source,
+                                tcp_packet.get_acknowledgement(),
+                                tcp_packet.get_sequence() + tcp_packet.payload().len() as u32,
+                                &[],
+                            );
 
-                        packet_send.send((source, ack)).unwrap();
+                            packet_send.send((source, ack)).unwrap();
+
+                            // handle the data
+                            state.data.extend_from_slice(tcp_packet.payload());
+                            println!("state currently contains {} bytes", state.data.len());
+                            protocol
+                                .handle_data(&source, state)
+                                .expect("TODO: handle this");
+                        }
                     } else if tcp_packet.get_flags() & TcpFlags::RST != 0 {
                         println!("RST :(");
                     } else {

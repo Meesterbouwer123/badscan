@@ -1,17 +1,24 @@
 use std::{fmt::Display, net::SocketAddrV4, sync::Arc};
 
+use thiserror::Error;
+
+use crate::tcpscanner::TcpState;
+
 use self::{query::QueryResponse, raknet::RaknetReponse};
 
 pub mod query;
 pub mod raknet;
 pub mod slp;
 
-pub enum Protocol {
+pub enum Protocol<T> {
     Udp(Arc<UdpProtocol>),
-    Tcp(Arc<dyn TcpProtocol>),
+    Tcp(Arc<dyn TcpProtocol<T>>),
 }
 
-impl Display for Protocol {
+impl<T> Display for Protocol<T>
+where
+    T: Default,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Protocol::Udp(proto) => write!(f, "{}", proto.name()),
@@ -20,7 +27,10 @@ impl Display for Protocol {
     }
 }
 
-impl Default for Protocol {
+impl<T> Default for Protocol<T>
+where
+    T: Default,
+{
     fn default() -> Self {
         Self::Udp(Arc::new(UdpProtocol::McQuery {
             callback: Box::new(|_, _| panic!("this should not be called")),
@@ -29,7 +39,10 @@ impl Default for Protocol {
     }
 }
 
-impl Protocol {
+impl<T> Protocol<T>
+where
+    T: Default,
+{
     pub fn default_port(&self) -> u16 {
         match self {
             Protocol::Udp(proto) => proto.default_port(),
@@ -38,24 +51,6 @@ impl Protocol {
     }
 }
 
-// I think that all the problems with the `Protocol` enum can be fixed by making this an enum with all the UDP-based protocols
-//TODO: do that
-/*pub trait UdpProtocol: Sync + Send {
-    fn initial_packet(&self, addr: &SocketAddrV4, cookie: u32) -> Vec<u8>;
-
-    fn handle_packet(
-        &self,
-        send_back: &dyn Fn(Vec<u8>),
-        source: &SocketAddrV4,
-        cookie: u32,
-        packet: &[u8],
-    );
-
-    fn name(&self) -> String;
-
-    fn default_port(&self) -> u16;
-}*/
-//#[derive(Clone)]
 pub enum UdpProtocol {
     McQuery {
         callback: Box<dyn Fn(&SocketAddrV4, QueryResponse) + Send + Sync>,
@@ -115,11 +110,26 @@ impl UdpProtocol {
     }
 }
 
-pub trait TcpProtocol: Sync + Send {
+#[derive(Error, Debug)]
+pub enum TcpError {
+    #[error("The stream wasn't yet complete")]
+    Incomplete,
+}
+
+pub trait TcpProtocol<T>: Sync + Send
+where
+    T: Default,
+{
     // this is an option because not all protocols start with a client packet
     fn initial_packet(&self, dest: &SocketAddrV4) -> Option<Vec<u8>>;
 
     fn name(&self) -> String;
 
     fn default_port(&self) -> u16;
+
+    fn handle_data(
+        &self,
+        source: &SocketAddrV4,
+        state: &mut TcpState<T>,
+    ) -> Result<usize, TcpError>;
 }

@@ -1,12 +1,15 @@
 use byteorder::{BigEndian, WriteBytesExt};
 
-use crate::utils;
+use crate::{tcpscanner::TcpState, utils};
 
 use super::TcpProtocol;
 
 pub struct MinecraftSlpProtocol {
     hello_packet: Vec<u8>,
 }
+
+#[derive(Debug, Default)]
+pub struct SlpState {}
 
 impl MinecraftSlpProtocol {
     pub fn new() -> Self {
@@ -16,7 +19,7 @@ impl MinecraftSlpProtocol {
     }
 }
 
-impl TcpProtocol for MinecraftSlpProtocol {
+impl TcpProtocol<SlpState> for MinecraftSlpProtocol {
     fn initial_packet(&self, _dest: &std::net::SocketAddrV4) -> Option<Vec<u8>> {
         Some(self.hello_packet.clone())
     }
@@ -27,6 +30,14 @@ impl TcpProtocol for MinecraftSlpProtocol {
 
     fn default_port(&self) -> u16 {
         25565
+    }
+
+    fn handle_data(
+        &self,
+        _source: &std::net::SocketAddrV4,
+        _state: &mut TcpState<SlpState>,
+    ) -> Result<usize, super::TcpError> {
+        todo!("actually handle the data")
     }
 }
 
